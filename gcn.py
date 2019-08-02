@@ -32,7 +32,7 @@ from dgl.data import citation_graph as citegrh
 from tqdm import tqdm
 
 from sklearn.manifold import TSNE
-from sklearn.model_selection import ParameterGrid
+from sklearn.model_selection import ParameterGrid, StratifiedShuffleSplit
 from sklearn import metrics
 from sklearn.cluster import KMeans
 
@@ -130,31 +130,60 @@ n_epochs = 300
 num_train = list(mask.numpy()).count(1)
 print("Part of train data: {}%".format(int((num_train/2708)*100)))
 
-# store info
-hidden_activations = []
-pred_labels = []
-loss = []
 
 # train
-with tqdm(range(n_epochs), unit='epoch') as t:
-    for epoch in t:
-        logits, hidden = net(g, features)
-        logp = F.log_softmax(logits, 1)
-        loss_train = F.nll_loss(logp[mask], labels[mask])
-        loss_test = F.nll_loss(logp[~mask], labels[~mask])
+def train(train_part):
+    # store info
+    hidden_activations_total = []
+    pred_labels_total = []
+    loss_total = []
+    acc_total = []
 
-        optimizer.zero_grad()
-        loss_train.backward()
-        optimizer.step()
+    # shuffle split and taking imbalance into account
+    sss = StratifiedShuffleSplit(n_splits=5, test_size=train_part, random_state=0)
 
-        # append activations and predicted labels
-        hidden_activations.append(hidden.detach().numpy())
-        pred_labels.append(np.argmax(logits.detach().numpy(), axis=1))
+    for mask_, _ in tqdm(sss.split(features, labels), desc='Training', unit='shuffle', leave=False):
 
-        # update description and store test loss
-        t.set_description("Train Loss {:.4f} | Test Loss {:.4f}".format(loss_train.item(), loss_test.item()))
-        loss.append(loss_test.item())
+        with tqdm(range(n_epochs), unit='epoch') as t:
+            # store info
+            hidden_activations_ = []
+            pred_labels_ = []
+            loss_ = []
+            acc_ = []
 
+            for _ in t:
+                logits, hidden = net(g, features)
+                logp = F.log_softmax(logits, 1)
+                loss_train = F.nll_loss(logp[mask_], labels[mask_])
+                loss_test = F.nll_loss(logp[~mask_], labels[~mask_])
+
+                optimizer.zero_grad()
+                loss_train.backward()
+                optimizer.step()
+
+                # append activations and predicted labels
+                hidden_activations_.append(hidden.detach().numpy())    # activations
+                pred = np.argmax(logits.detach().numpy(), axis=1)
+                pred_labels_.append(pred)    # predictions
+                pred_test = np.argmax(logits[~mask_].detach().numpy(), axis=1)
+                acc_.append(metrics.balanced_accuracy_score(labels[~mask_].numpy(), pred_test))    # accuracy
+
+                # update description and store test loss
+                t.set_description("Train Loss {:.4f} | Test Loss {:.4f}".format(loss_train.item(), loss_test.item()))
+                loss_.append(loss_test.item())
+
+            # save info
+            hidden_activations_total.append(hidden_activations_)
+            pred_labels_total.append(pred_labels_)
+            loss_total.append(loss_)
+            acc_total.append(acc_)
+
+    return np.mean(np.array(hidden_activations_total), axis=0), \
+           np.around(np.mean(np.array(pred_labels_total), axis=0)), np.mean(np.array(loss_total), axis=0), \
+           np.mean(np.array(acc_total), axis=0)
+
+
+hidden_activations, pred_labels, loss, acc = train(0.05)
 
 ########################################################################################################################
 # VISUALIZATION
@@ -164,7 +193,7 @@ plt.figure(figsize=(8, 6))
 
 # plot data
 plt.title('GCN test loss over epochs \n', size=12, weight='bold')
-plt.text(0.78, 0.875, 'dataset: Cora \noptimizer: Adam \ninitial lr: 1e-3 \nloss: NLL \ntest part: 5% ',
+plt.text(0.78, 0.875, 'dataset: Cora \noptimizer: Adam \ninitial lr: 1e-3 \nloss: NLL \ntrain part: 5% ',
          verticalalignment='center',
          transform=plt.gca().transAxes,
          bbox=dict(boxstyle="round,pad=0.6", edgecolor='black', facecolor='white', alpha=0.5))
@@ -172,6 +201,23 @@ plt.plot(np.arange(n_epochs), loss)
 plt.xlabel('epoch')
 plt.ylabel('test loss')
 plt.savefig(os.path.join(cur_dir, './plots/gcn_loss.png'))
+
+# clean up
+plt.close('all')
+
+# accuracy over epochs
+plt.figure(figsize=(8, 6))
+
+# plot data
+plt.title('GCN balanced test accuracy over epochs \n', size=12, weight='bold')
+plt.text(0.78, 0.875, 'dataset: Cora \noptimizer: Adam \ninitial lr: 1e-3 \nloss: NLL \ntrain part: 5% ',
+         verticalalignment='center',
+         transform=plt.gca().transAxes,
+         bbox=dict(boxstyle="round,pad=0.6", edgecolor='black', facecolor='white', alpha=0.5))
+plt.plot(np.arange(n_epochs), acc)
+plt.xlabel('epoch')
+plt.ylabel('test accuracy')
+plt.savefig(os.path.join(cur_dir, './plots/gcn_acc.png'))
 
 # clean up
 plt.close('all')
@@ -187,7 +233,7 @@ parameters = {'perplexity': [20, 35], 'learning_rate': [50, 125, 200],
 
 
 # helper functions
-def bench_k_means(estimator, name):
+def bench_k_means(estimator):
     # metrics
     metrs = [metrics.homogeneity_score, metrics.completeness_score, metrics.v_measure_score,
              metrics.adjusted_rand_score, metrics.adjusted_mutual_info_score]
@@ -205,7 +251,7 @@ def activations_vis(data, tsne_param, path):
     kmeans = KMeans(init='k-means++', n_clusters=7, n_init=10).fit(embedded_activations)
 
     # clustering scores
-    score = bench_k_means(kmeans, name="t-SNE")
+    score = bench_k_means(kmeans)
 
     # plot init
     plt.figure(figsize=(6, 6))
@@ -227,3 +273,34 @@ def activations_vis(data, tsne_param, path):
 # actual visualization for different t-SNE hyper-parameters
 for param in tqdm(ParameterGrid(parameters), desc='t-SNE hyper-parameter search'):
     activations_vis(hidden_activations_best, param, './plots/gcn_tsne/{}_{}_{}.png'.format(*param.values()))
+
+
+########################################################################################################################
+# CHECK DIFFERENT TRAIN/TEST SPLITS
+
+train_percentage = np.arange(5, 100, 5)
+
+with tqdm(train_percentage, desc='Train/Test split check', unit='percentage') as t:
+    acc_best = []
+    for p in t:
+        # train
+        _, _, _, cur_acc = train(p/100)
+        # append to accuracies
+        acc_best.append(np.max(cur_acc))
+
+# accuracy over epochs
+plt.figure(figsize=(8, 6))
+
+# plot data
+plt.title('Best test accuracy depending on train/test split \n', size=12, weight='bold')
+plt.text(0.78, 0.895, 'dataset: Cora \noptimizer: Adam \ninitial lr: 1e-3 \nloss: NLL',
+         verticalalignment='center',
+         transform=plt.gca().transAxes,
+         bbox=dict(boxstyle="round,pad=0.6", edgecolor='black', facecolor='white', alpha=0.5))
+plt.plot(train_percentage, acc_best)
+plt.xlabel('train part [%]')
+plt.ylabel('test accuracy')
+plt.savefig(os.path.join(cur_dir, './plots/gcn_split.png'))
+
+# clean up
+plt.close('all')
