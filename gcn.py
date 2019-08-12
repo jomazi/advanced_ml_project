@@ -14,20 +14,21 @@ has to be overwritten. The init function has to be replaced as it follows:
 def __init__(self):
     self.dir = os.path.dirname(os.path.abspath(__file__)).split('venv')[0] + 'data'
     self._load()
-
 """
 
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 import dgl
-import dgl.function as fn
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
 from dgl import DGLGraph
 from dgl.data import citation_graph as citegrh
+
+from fcts.layer import GCN
+from fcts.clustering import bench_k_means
 
 from tqdm import tqdm
 
@@ -47,36 +48,9 @@ simplefilter(action='ignore', category=FutureWarning)
 # determine directory of this script
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 
+
 ########################################################################################################################
 # MODEL
-
-gcn_msg = fn.copy_src(src='h', out='m')
-gcn_reduce = fn.sum(msg='m', out='h')
-
-
-class NodeApplyModule(nn.Module):
-    def __init__(self, in_feats, out_feats, activation):
-        super(NodeApplyModule, self).__init__()
-        self.linear = nn.Linear(in_feats, out_feats)
-        self.activation = activation
-
-    def forward(self, node):
-        h = self.linear(node.data['h'])
-        h = self.activation(h)
-        return {'h': h}
-
-
-class GCN(nn.Module):
-    def __init__(self, in_feats, out_feats, activation):
-        super(GCN, self).__init__()
-        self.apply_mod = NodeApplyModule(in_feats, out_feats, activation)
-
-    def forward(self, g, feature):
-        g.ndata['h'] = feature
-        g.update_all(gcn_msg, gcn_reduce)
-        g.apply_nodes(func=self.apply_mod)
-        return g.ndata.pop('h')
-
 
 class Net(nn.Module):
     def __init__(self):
@@ -232,17 +206,6 @@ parameters = {'perplexity': [20, 35], 'learning_rate': [50, 125, 200],
               'metric': ['euclidean', 'cityblock', 'cosine', 'correlation']}
 
 
-# helper functions
-def bench_k_means(estimator):
-    # metrics
-    metrs = [metrics.homogeneity_score, metrics.completeness_score, metrics.v_measure_score,
-             metrics.adjusted_rand_score, metrics.adjusted_mutual_info_score]
-    # scores
-    scores = [m(pred_labels_best, estimator.labels_) for m in metrs]
-
-    return np.mean(scores)
-
-
 def activations_vis(data, tsne_param, path):
     # t-SNE
     embedded_activations = TSNE(n_components=2, **tsne_param).fit_transform(data)
@@ -251,7 +214,7 @@ def activations_vis(data, tsne_param, path):
     kmeans = KMeans(init='k-means++', n_clusters=7, n_init=10).fit(embedded_activations)
 
     # clustering scores
-    score = bench_k_means(kmeans)
+    score = bench_k_means(pred_labels_best, kmeans)
 
     # plot init
     plt.figure(figsize=(6, 6))

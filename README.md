@@ -24,3 +24,8 @@
     ```
     pip install -r requirements.txt
     ```
+    
+### Data
+
+To be able to use the [Cora](https://relational.fit.cvut.cz/dataset/CORA) dataset and run the scripts, 
+have a look at the instructions given in ```gcn.py```.
