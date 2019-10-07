@@ -142,6 +142,7 @@ def train(net, optim, use_features):
     for _ in tqdm(range(n_routines), desc='Training', unit='routine', leave=False):
 
         with tqdm(range(n_epochs), unit='epoch', leave=False) as t:
+            net.train()
             # store info
             loss_ = []
             acc_ = []

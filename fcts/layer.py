@@ -53,3 +53,35 @@ class InnerProductDecoder(nn.Module):
         z = F.dropout(z, self.dropout, self.training)
         adj = self.activation(th.mm(z, z.t()))
         return adj
+
+
+# activations
+acts = {'relu': F.relu, 'linear': lambda x: x, 'sigmoid': th.sigmoid, 'binary step': lambda x: th.sign(F.relu(x))}
+
+
+class VGAE(nn.Module):
+    def __init__(self, input_feat_dim, hidden_dim, latent_dim, dropout=0., xavier_init=False,
+                 activations=['relu', 'linear', 'sigmoid']):
+        super(VGAE, self).__init__()
+        global acts
+        self.gcn1 = GCN(input_feat_dim, hidden_dim, acts[activations[0]], dropout=dropout, xavier_init=xavier_init)
+        self.gcn2 = GCN(hidden_dim, latent_dim, acts[activations[1]], dropout=dropout, xavier_init=xavier_init)
+        self.gcn3 = GCN(hidden_dim, latent_dim, acts[activations[1]], dropout=dropout, xavier_init=xavier_init)
+        self.dc = InnerProductDecoder(activation=acts[activations[2]], dropout=dropout)
+
+    def encode(self, g, features):
+        hidden = self.gcn1(g, features)
+        return self.gcn2(g, hidden), self.gcn3(g, hidden)
+
+    def reparameterize(self, mu, logvar):
+        if self.training:
+            std = th.exp(logvar)
+            eps = th.randn_like(std)
+            return eps.mul(std).add_(mu)
+        else:
+            return mu
+
+    def forward(self, g, features):
+        mu, logvar = self.encode(g, features)
+        z = self.reparameterize(mu, logvar)
+        return self.dc(z), mu, logvar

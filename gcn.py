@@ -114,9 +114,12 @@ def train(train_part):
     acc_total = []
 
     # shuffle split and taking imbalance into account
-    sss = StratifiedShuffleSplit(n_splits=5, test_size=train_part, random_state=0)
+    sss = StratifiedShuffleSplit(n_splits=5, train_size=train_part, random_state=0)
 
-    for mask_, _ in tqdm(sss.split(features, labels), desc='Training', unit='shuffle', leave=False):
+    for mask_, test_mask_ in tqdm(sss.split(features, labels), desc='Training', unit='shuffle', leave=False):
+        # reinitialize net and optimizer
+        net.__init__()
+        optimizer = th.optim.Adam(net.parameters(), lr=1e-3)
 
         with tqdm(range(n_epochs), unit='epoch') as t:
             # store info
@@ -129,7 +132,7 @@ def train(train_part):
                 logits, hidden = net(g, features)
                 logp = F.log_softmax(logits, 1)
                 loss_train = F.nll_loss(logp[mask_], labels[mask_])
-                loss_test = F.nll_loss(logp[~mask_], labels[~mask_])
+                loss_test = F.nll_loss(logp[test_mask_], labels[test_mask_])
 
                 optimizer.zero_grad()
                 loss_train.backward()
@@ -139,8 +142,8 @@ def train(train_part):
                 hidden_activations_.append(hidden.detach().numpy())    # activations
                 pred = np.argmax(logits.detach().numpy(), axis=1)
                 pred_labels_.append(pred)    # predictions
-                pred_test = np.argmax(logits[~mask_].detach().numpy(), axis=1)
-                acc_.append(metrics.balanced_accuracy_score(labels[~mask_].numpy(), pred_test))    # accuracy
+                pred_test = np.argmax(logits[test_mask_].detach().numpy(), axis=1)
+                acc_.append(metrics.balanced_accuracy_score(labels[test_mask_].numpy(), pred_test))    # accuracy
 
                 # update description and store test loss
                 t.set_description("Train Loss {:.4f} | Test Loss {:.4f}".format(loss_train.item(), loss_test.item()))
